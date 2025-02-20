@@ -4,6 +4,8 @@
     <TargetFramework>net8.0</TargetFramework>
     <RootNamespace>TortoPCMonitor</RootNamespace>
     <AssemblyName>TortoPCMonitor</AssemblyName>
+    <Product>TortoPCMonitor</Product>
+    <Description>PC Hardware Monitor</Description>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
