@@ -15,6 +15,7 @@ public class Program
     private static bool DEBUG = false; // Add this line at the class level
 
     private static bool sudoAccess = false;
+    private static string selectedStorage = "";
 
     public static async Task Main(string[] args)
     {
@@ -32,24 +33,56 @@ public class Program
 
     private static async Task StartUp()
     {
-        if(OperatingSystem.IsWindows())
+        if (OperatingSystem.IsWindows())
         {
             // Check if running with admin privileges
             bool isAdmin = new WindowsPrincipal(WindowsIdentity.GetCurrent())
                 .IsInRole(WindowsBuiltInRole.Administrator);
-            
+
             if (!isAdmin)
             {
                 Console.WriteLine("Warning: Running without administrator privileges. Some sensors may not be accessible.");
                 Console.WriteLine("Try running the application as administrator for full hardware monitoring support.");
             }
+            updateVisitor = new UpdateVisitor();
+
+            computer = new Computer
+            {
+                IsCpuEnabled = true,
+                IsGpuEnabled = true,
+                IsMemoryEnabled = true,
+                IsStorageEnabled = true,
+                IsControllerEnabled = true,
+                IsMotherboardEnabled = true,
+                IsNetworkEnabled = false,
+                IsBatteryEnabled = false
+            };
+            computer.Open();
+                computer.Accept(updateVisitor);
+
+            var storage = computer.Hardware.Where(t => t.HardwareType == HardwareType.Storage).ToList();
+
+
+            if (storage.Count > 1)
+            {
+                Console.WriteLine("We found multiple storage devices, please select the one you want to monitor");
+                for (int index = 0; index < storage.Count; index++)
+                {
+                    Console.WriteLine($"{index + 1}. {storage[index].Name}");
+                }
+                var input = Console.ReadLine();
+                if (int.TryParse(input, out int selection) && selection > 0 && selection <= storage.Count)
+                {
+                    selectedStorage = storage[selection - 1].Name;
+                }
+            }
         }
 
-        if(OperatingSystem.IsMacOS())
+        if (OperatingSystem.IsMacOS())
         {
             // Check if iStats is installed
             var iStatsVersion = await ExecuteCommand("gem", "list -i istats");
-            
+
             if (!iStatsVersion.Contains("true"))
             {
                 Console.WriteLine("iStats is not installed. Run this command: sudo gem install iStats");
@@ -69,11 +102,15 @@ public class Program
                     if (string.IsNullOrEmpty(sudoCheck))
                     {
                         sudoAccess = true;
-                    } else {
+                    }
+                    else
+                    {
                         Console.WriteLine("Failed to get sudo access. Not showing GPU usage.");
                     }
                 }
-            } else {
+            }
+            else
+            {
                 sudoAccess = true;
             }
         }
@@ -265,6 +302,10 @@ public class Program
                             break;
 
                         case HardwareType.Storage:
+                            if (string.IsNullOrEmpty(selectedStorage) == false && hardware.Name != selectedStorage)
+                            {
+                                break;
+                            }
                             foreach (var sensor in hardware.Sensors)
                             {
                                 if (sensor.SensorType == SensorType.Temperature && sensor.Value.HasValue)
@@ -302,7 +343,7 @@ public class Program
         else if (OperatingSystem.IsMacOS())
         {
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            
+
             // Get CPU temperature using iStats
             var cpuTempOutput = await ExecuteCommand("istats", "cpu temp --value-only");
             cpuTemp = $"{float.Parse(cpuTempOutput.Trim()):F0}C";
@@ -334,7 +375,7 @@ public class Program
             var lines = vmstat.Split('\n');
             if (lines.Length > 1)
             {
-                ulong freePages = 0, activePages = 0, inactivePages = 0, 
+                ulong freePages = 0, activePages = 0, inactivePages = 0,
                       wiredPages = 0, compressedPages = 0;
                 const ulong PAGE_SIZE = 4096; // Size of a page in bytes
 
@@ -358,14 +399,14 @@ public class Program
                 var totalPhysicalMemory = await ExecuteCommand("sysctl", "-n hw.memsize");
                 var totalMemoryBytes = ulong.Parse(totalPhysicalMemory);
                 var memoryUsagePercent = (usedMemoryBytes * 100) / totalMemoryBytes;
-                
+
                 memUse = $"{memoryUsagePercent}%";
             }
             if (DEBUG) Console.WriteLine($"Memory usage check took: {sw.ElapsedMilliseconds}ms");
 
             // GPU information
             sw.Restart();
-            
+
             // GPU Temperature
             try
             {
@@ -399,7 +440,7 @@ public class Program
                 gpuUse = "N/A";
                 if (DEBUG) Console.WriteLine($"Error getting macOS GPU usage: {ex.Message}");
             }
-            
+
             if (DEBUG) Console.WriteLine($"GPU usage check took: {sw.ElapsedMilliseconds}ms");
 
             // Disk temperature
@@ -487,7 +528,7 @@ public class Program
         // Send data to device
         string para_info = JsonConvert.SerializeObject(PostInfo);
         await HttpPost($"http://{device.DevicePrivateIP}:80/post", para_info);
-        if(DEBUG) return;
+        if (DEBUG) return;
 
         // If this is the first time, save the current cursor position
         if (statusStartLine == 0)
