@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using Newtonsoft.Json;
 using LibreHardwareMonitor.Hardware;
 using System.Linq;
+using System.Security.Principal;
 
 namespace DivoomPCDataTool;
 
@@ -31,6 +32,19 @@ public class Program
 
     private static async Task StartUp()
     {
+        if(OperatingSystem.IsWindows())
+        {
+            // Check if running with admin privileges
+            bool isAdmin = new WindowsPrincipal(WindowsIdentity.GetCurrent())
+                .IsInRole(WindowsBuiltInRole.Administrator);
+            
+            if (!isAdmin)
+            {
+                Console.WriteLine("Warning: Running without administrator privileges. Some sensors may not be accessible.");
+                Console.WriteLine("Try running the application as administrator for full hardware monitoring support.");
+            }
+        }
+
         if(OperatingSystem.IsMacOS())
         {
             // Check if iStats is installed
@@ -163,16 +177,23 @@ public class Program
         {
             try
             {
-                // Initialize the visitor here, only when needed on Windows
-                updateVisitor = new UpdateVisitor();
+                if (computer != null)
+                {
+                    computer.Close();
+                    computer = null;
+                }
 
-                // Initialize and open computer only on Windows
+                updateVisitor = new UpdateVisitor();
                 computer = new Computer
                 {
                     IsCpuEnabled = true,
                     IsGpuEnabled = true,
                     IsMemoryEnabled = true,
-                    IsStorageEnabled = true
+                    IsStorageEnabled = true,
+                    IsControllerEnabled = true,
+                    IsMotherboardEnabled = true,
+                    IsNetworkEnabled = false,
+                    IsBatteryEnabled = false
                 };
 
                 computer.Open();
@@ -180,19 +201,51 @@ public class Program
 
                 foreach (var hardware in computer.Hardware)
                 {
+                    hardware.Update();
+
                     switch (hardware.HardwareType)
                     {
                         case HardwareType.Cpu:
+                            float totalCpuLoad = 0;
+                            int loadSensorCount = 0;
+                            float? packageTemp = null;
+
                             foreach (var sensor in hardware.Sensors)
                             {
                                 if (sensor.SensorType == SensorType.Temperature && sensor.Value.HasValue)
                                 {
-                                    cpuTemp = $"{sensor.Value:F0}C";
+                                    if (sensor.Name.Equals("CPU Package", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        packageTemp = sensor.Value;
+                                        break;
+                                    }
+                                    else if (sensor.Name.Equals("Core Average", StringComparison.OrdinalIgnoreCase) && !packageTemp.HasValue)
+                                    {
+                                        packageTemp = sensor.Value;
+                                    }
+                                    else if (sensor.Name.Equals("Core Max", StringComparison.OrdinalIgnoreCase) && !packageTemp.HasValue)
+                                    {
+                                        packageTemp = sensor.Value;
+                                    }
                                 }
                                 else if (sensor.SensorType == SensorType.Load && sensor.Value.HasValue)
                                 {
-                                    cpuUse = $"{sensor.Value:F0}%";
+                                    if (sensor.Name.Equals("CPU Total", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        totalCpuLoad = sensor.Value.Value;
+                                        loadSensorCount = 1;
+                                    }
                                 }
+                            }
+
+                            if (packageTemp.HasValue)
+                            {
+                                cpuTemp = $"{packageTemp:F0}C";
+                            }
+
+                            if (loadSensorCount > 0)
+                            {
+                                cpuUse = $"{totalCpuLoad:F0}%";
                             }
                             break;
 
@@ -228,18 +281,22 @@ public class Program
                 memInfo.dwLength = (uint)Marshal.SizeOf(typeof(MEMORYSTATUSEX));
                 GlobalMemoryStatusEx(ref memInfo);
                 memUse = $"{(memInfo.ullTotalPhys - memInfo.ullAvailPhys) * 100 / memInfo.ullTotalPhys:F0}%";
-
-                computer.Close();
-                computer = null; // Clean up the reference
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error getting Windows system info: {ex.Message}");
+                if (DEBUG)
+                {
+                    Console.WriteLine($"Error accessing hardware: {ex.Message}");
+                    Console.WriteLine($"Stack trace: {ex.StackTrace}");
+                }
             }
             finally
             {
-                // Clean up the visitor reference too
-                updateVisitor = null;
+                if (computer != null)
+                {
+                    computer.Close();
+                    computer = null;
+                }
             }
         }
         else if (OperatingSystem.IsMacOS())
